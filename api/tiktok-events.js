@@ -1,92 +1,59 @@
-module.exports = async function handler(req, res) {
+module.exports = async function (req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS,GET");
+  res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    return res.end();
-  }
-
-  if (req.method === "GET") {
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json");
-    return res.end(JSON.stringify({ status: "ok", message: "TikTok server events API is running" }));
+    res.status(204).end();
+    return;
   }
 
   if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "application/json");
-    return res.end(JSON.stringify({ status: "error", message: "Method not allowed" }));
+    res.status(405).json({ error: "Only POST allowed" });
+    return;
   }
 
+  let body = {};
   try {
-    var pixelId = process.env.TIKTOK_PIXEL_ID;
-    var accessToken = process.env.TIKTOK_ACCESS_TOKEN;
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    body = JSON.parse(Buffer.concat(chunks).toString());
+  } catch (e) {
+    body = {};
+  }
 
-    if (!pixelId || !accessToken) {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "application/json");
-      return res.end(JSON.stringify({ status: "error", message: "Missing env vars" }));
-    }
+  const pixelId = process.env.TIKTOK_PIXEL_ID;
+  const accessToken = process.env.TIKTOK_ACCESS_TOKEN;
 
-    var body = req.body || {};
-    var eventName = body.event;
-    var eventId = body.event_id;
-    var value = body.value;
-    var currency = body.currency;
-    var testEventCode = body.test_event_code;
-    var user = body.user || {};
-    var page = body.page || {};
+  if (!pixelId || !accessToken) {
+    res.status(500).json({ error: "Missing env vars" });
+    return;
+  }
 
-    var ip =
-      (req.headers["x-forwarded-for"] && String(req.headers["x-forwarded-for"]).split(",")[0].trim()) ||
-      req.socket.remoteAddress ||
-      "";
-
-    var ua = req.headers["user-agent"] || "";
-
-    var payload = {
-      pixel_code: pixelId,
-      event: eventName,
-      event_id: eventId,
-      timestamp: Math.floor(Date.now() / 1000),
-      properties: {
-        value: value,
-        currency: currency
-      },
-      context: {
-        page: {
-          url: page.url || "",
-          referrer: page.referrer || ""
+  const payload = {
+    pixel_code: pixelId,
+    test_event_code: body.test_event_code,
+    data: [
+      {
+        event: body.event,
+        event_id: body.event_id,
+        timestamp: Math.floor(Date.now() / 1000),
+        properties: {
+          value: body.value,
+          currency: body.currency || "SAR"
         },
-        user: {
-          ip: ip,
-          user_agent: ua,
-          email: user.email || null,
-          phone_number: user.phone || null
+        context: {
+          page: {
+            url: body.page?.url || "",
+            referrer: body.page?.referrer || ""
+          },
+          user: {
+            ip: req.headers["x-forwarded-for"]?.split(",")[0] || "",
+            user_agent: req.headers["user-agent"] || ""
+          }
         }
       }
-    };
+    ]
+  };
 
-    if (testEventCode) payload.test_event_code = testEventCode;
-
-    var resp = await fetch("https://business-api.tiktok.com/open_api/v1.3/pixel/track/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Token": accessToken
-      },
-      body: JSON.stringify(payload)
-    });
-
-    var text = await resp.text();
-    res.statusCode = resp.status;
-    res.setHeader("Content-Type", "application/json");
-    return res.end(text);
-  } catch (e) {
-    res.statusCode = 500;
-    res.setHeader("Content-Type", "application/json");
-    return res.end(JSON.stringify({ status: "error", message: "Server error" }));
-  }
-};
+  const response = a
