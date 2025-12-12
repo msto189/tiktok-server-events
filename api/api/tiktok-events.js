@@ -3,9 +3,8 @@
 const TIKTOK_API_URL =
   "https://business-api.tiktok.com/open_api/v1.3/event/track/";
 
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
   if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method Not Allowed" });
   }
 
@@ -16,49 +15,48 @@ export default async function handler(req, res) {
       value,
       currency,
       test_event_code,
-      user = {},
-      page = {},
+      user,
+      page,
     } = req.body || {};
 
     if (!event || !event_id) {
-      return res.status(400).json({
-        error: "Missing required fields: event, event_id",
-      });
+      return res.status(400).json({ error: "Missing event or event_id" });
     }
 
-    const eventTime = Math.floor(Date.now() / 1000);
+    const pixelCode = process.env.TIKTOK_PIXEL_ID;
+    const accessToken = process.env.TIKTOK_ACCESS_TOKEN;
 
-    const ipHeader = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-    const ip =
-      typeof ipHeader === "string" ? ipHeader.split(",")[0].trim() : null;
-
-    const userAgent = req.headers["user-agent"] || null;
+    if (!pixelCode || !accessToken) {
+      return res
+        .status(500)
+        .json({ error: "Missing TIKTOK_PIXEL_ID or TIKTOK_ACCESS_TOKEN" });
+    }
 
     const payload = {
       event_source: "web",
-      event_source_id: process.env.TIKTOK_PIXEL_ID,
+      event_source_id: pixelCode,
+      test_event_code: test_event_code || undefined,
       data: [
         {
-          event,
-          event_time: eventTime,
-          event_id,
-          user: {
-            email: user.email || null,
-            phone: user.phone || null,
-            external_id: user.external_id || null,
-            ip,
-            user_agent: userAgent,
+          event: event,
+          event_id: event_id,
+          timestamp: new Date().toISOString(),
+          context: {
+            page: {
+              url: (page && page.url) || null,
+              referrer: (page && page.referrer) || null,
+            },
+            user: {
+              email: user && user.email ? user.email : null,
+              phone: user && user.phone ? user.phone : null,
+              external_id:
+                user && user.external_id ? user.external_id : null,
+            },
           },
           properties: {
-            value: value ?? null,
-            currency: currency || "USD",
-            ...user.properties,
+            value: typeof value === "number" ? value : 0,
+            currency: currency || "SAR",
           },
-          page: {
-            url: page.url || null,
-            referrer: page.referrer || null,
-          },
-          test_event_code: test_event_code || undefined,
         },
       ],
     };
@@ -67,26 +65,27 @@ export default async function handler(req, res) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Access-Token": process.env.TIKTOK_ACCESS_TOKEN,
+        "Access-Token": accessToken,
       },
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const dataResp = await response.json();
 
     if (!response.ok) {
-      console.error("TikTok API Error:", data);
-      return res
-        .status(500)
-        .json({ error: "TikTok API error", details: data });
+      console.error("TikTok API Error", dataResp);
+      return res.status(500).json({
+        error: "TikTok API error",
+        details: dataResp,
+      });
     }
 
     return res.status(200).json({
       success: true,
-      tiktok_response: data,
+      tiktok_response: dataResp,
     });
   } catch (err) {
-    console.error("Server error:", err);
+    console.error("Server error", err);
     return res.status(500).json({ error: "Internal Server Error" });
   }
-}
+};
