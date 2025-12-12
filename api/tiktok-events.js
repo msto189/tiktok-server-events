@@ -1,89 +1,105 @@
-module.exports = async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+// api/tiktok-events.js
 
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
+const TIKTOK_PIXEL_ID = process.env.TIKTOK_PIXEL_ID;
+const TIKTOK_ACCESS_TOKEN = process.env.TIKTOK_ACCESS_TOKEN;
 
+const TIKTOK_EVENTS_URL =
+  "https://business-api.tiktok.com/open_api/v1.3/pixel/track/";
+
+async function handler(req, res) {
+  // Health check for GET
   if (req.method === "GET") {
-    return res
-      .status(200)
-      .json({ status: "ok", message: "TikTok server events API is running" });
+    return res.status(200).json({
+      status: "ok",
+      message: "TikTok server events API is running",
+    });
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method Not Allowed" });
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  if (!TIKTOK_PIXEL_ID || !TIKTOK_ACCESS_TOKEN) {
+    return res.status(500).json({
+      error: "Missing TIKTOK_PIXEL_ID or TIKTOK_ACCESS_TOKEN in env",
+    });
   }
 
   try {
     const body = req.body || {};
 
-    const event = body.event;
-    const event_id = body.event_id;
-    const value = body.value;
-    const currency = body.currency;
-    const test_event_code = body.test_event_code || null;
+    const eventName = body.event || "CompletePayment";
+    const eventId = body.event_id || `zid_order_${Date.now()}`;
+    const value = Number(body.value || 0);
+    const currency = body.currency || "SAR";
+    const testEventCode = body.test_event_code || undefined;
+
     const user = body.user || {};
     const page = body.page || {};
 
-    const pixelId = process.env.TIKTOK_PIXEL_ID;
-    const accessToken = process.env.TIKTOK_ACCESS_TOKEN;
-
-    if (!pixelId || !accessToken) {
-      return res.status(500).json({
-        error: "Missing TikTok credentials",
-        details: "TIKTOK_PIXEL_ID or TIKTOK_ACCESS_TOKEN is not set"
-      });
-    }
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+    const userAgent = req.headers["user-agent"] || "";
 
     const payload = {
-      event: event,
-      event_id: event_id,
+      pixel_code: TIKTOK_PIXEL_ID,
+      event: eventName,
+      event_id: eventId,
       timestamp: Math.floor(Date.now() / 1000),
       context: {
         page: {
           url: page.url || "",
-          referrer: page.referrer || ""
+          referrer: page.referrer || "",
         },
         user: {
           email: user.email || null,
-          phone_number: user.phone || null
-        }
+          phone: user.phone || null,
+        },
+        ip,
+        user_agent: userAgent,
       },
       properties: {
-        value: value,
-        currency: currency
+        value,
+        currency,
       },
-      test_event_code: test_event_code
     };
 
-    const response = await fetch(
-      "https://business-api.tiktok.com/open_api/v1.3/event/track/",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Token": accessToken
-        },
-        body: JSON.stringify({
-          pixel_code: pixelId,
-          data: [payload]
-        })
-      }
-    );
+    if (testEventCode) {
+      payload.test_event_code = testEventCode;
+    }
 
-    const result = await response.json();
+    const tiktokResponse = await fetch(TIKTOK_EVENTS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Token": TIKTOK_ACCESS_TOKEN,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const rawText = await tiktokResponse.text();
+    let forwardBody;
+
+    try {
+      forwardBody = JSON.parse(rawText);
+    } catch (e) {
+      forwardBody = rawText;
+    }
 
     return res.status(200).json({
-      ok: true,
-      tiktok_response: result
+      status: "ok",
+      forward_status: tiktokResponse.status,
+      forward_body: forwardBody,
+      sent_payload: payload,
     });
   } catch (err) {
+    console.error("TikTok server event error:", err);
+
     return res.status(500).json({
-      error: "Server Error",
-      details: err && err.message ? err.message : String(err)
+      status: "error",
+      message: "Failed to send event to TikTok",
+      error: String(err && err.message ? err.message : err),
     });
   }
-};
+}
+
+module.exports = handler;
